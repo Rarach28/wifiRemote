@@ -69,7 +69,7 @@ enum Agent {
             let query = Dictionary((url?.queryItems ?? []).map { ($0.name, $0.value ?? "") },
                                    uniquingKeysWith: { first, _ in first })
             // The widgets' buttons need no adb: answer at once, even while adb is busy or downloading.
-            if parts == ["buttons"] {
+            if parts == ["buttons"] || parts == ["whoami"] {
                 let (code, body) = route(parts, query)
                 return reply(connection, code, body)
             }
@@ -85,6 +85,8 @@ enum Agent {
         case ("buttons", 1):
             return (200, ["tv": Store.activeTv?.name ?? "",
                           "apps": Store.buttons(for: Store.activeHost).map { [$0.package, $0.name] }])
+        case ("whoami", 1):
+            return (200, ["path": Bundle.main.bundlePath])
         case ("adb", 1):
             return (200, ["ready": (try? Adb.shared.binary()) != nil])
         case ("discover", 1):

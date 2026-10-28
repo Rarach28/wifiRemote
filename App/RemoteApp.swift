@@ -34,13 +34,18 @@ final class RemoteModel: ObservableObject {
         }
     }
 
-    /// Makes sure the login agent is registered and answering, and that it has adb.
+    /// Makes sure the login agent runs from this copy of the app and answers, and that it has adb.
     private func startAgent() async {
-        if await AgentClient.get("/buttons", timeout: 3) == nil {
-            try? SMAppService.agent(plistName: Agent.plist).register()
-            for _ in 0..<20 {
+        // An agent registered from another copy (the app opened from Downloads, then moved to Applications, or
+        // an older build) would run that copy, or nothing once it is deleted: register it again from here.
+        let here = Bundle.main.bundlePath
+        if (await AgentClient.get("/whoami", timeout: 3) as? [String: Any])?["path"] as? String != here {
+            let service = SMAppService.agent(plistName: Agent.plist)
+            try? await service.unregister()
+            try? service.register()
+            for _ in 0..<30 {
                 try? await Task.sleep(for: .milliseconds(300))
-                if await AgentClient.get("/buttons", timeout: 2) != nil { break }
+                if (await AgentClient.get("/whoami", timeout: 2) as? [String: Any])?["path"] as? String == here { break }
             }
         }
         // The first launch on a Mac without adb downloads Google's Platform-Tools (about 16 MB).
