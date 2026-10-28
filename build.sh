@@ -30,12 +30,14 @@ export TEAM_ID
 mkdir -p build
 # A random token the agent wants on every request; kept across rebuilds so a running agent and new widgets agree.
 [ -f build/token ] || "$PY" -I -c 'import secrets; print(secrets.token_hex(16))' > build/token
+# The agent's port comes from the token too, so two builds (or forks) on one Mac never fight over a port.
+AGENT_PORT=$((40000 + 16#$(cut -c1-4 build/token) % 20000))
 cat > build/BuildConfig.swift <<SWIFT
 enum BuildConfig {
     static let repo = "$ROOT"
     static let python = "$PY"
     static let tvHost = "$TV_HOST"
-    static let agentPort: UInt16 = 47811
+    static let agentPort: UInt16 = $AGENT_PORT
     static let agentToken = "$(cat build/token)"
 }
 SWIFT
