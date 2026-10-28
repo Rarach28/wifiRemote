@@ -34,7 +34,7 @@ final class RemoteModel: ObservableObject {
         }
     }
 
-    /// Makes sure the login agent is registered and answering.
+    /// Makes sure the login agent is registered and answering, and that it has adb.
     private func startAgent() async {
         if await AgentClient.get("/buttons", timeout: 3) == nil {
             try? SMAppService.agent(plistName: Agent.plist).register()
@@ -43,6 +43,10 @@ final class RemoteModel: ObservableObject {
                 if await AgentClient.get("/buttons", timeout: 2) != nil { break }
             }
         }
+        // The first launch on a Mac without adb downloads Google's Platform-Tools (about 16 MB).
+        message = "Připravuji nástroje Android (adb)…"
+        let ready = (await AgentClient.get("/adb", timeout: 180) as? [String: Any])?["ready"] as? Bool == true
+        message = ready ? nil : "Nepodařilo se stáhnout nástroje Android (adb). Zkontroluj připojení k internetu."
         refresh()
         // A TV saved without a name yet (first run, or added while it did not answer): ask it.
         if let tv = activeTv, tv.name == "TV" || tv.name == tv.host,
@@ -91,30 +95,82 @@ final class RemoteModel: ObservableObject {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    /// Saves a TV and makes it the active one; its name comes from the TV once it answers.
-    func addTv(_ rawHost: String) {
-        let host = rawHost.trimmingCharacters(in: .whitespaces)
-        guard !host.isEmpty, host.range(of: #"^[\w.:-]+$"#, options: .regularExpression) != nil else { return }
-        if !tvs.contains(where: { $0.host == host }) {
-            tvs.append(SavedTv(host: host, name: host))
-            Store.tvs = tvs
+    /// Adds a TV by its IP ("192.168.1.50", classic network debugging) or "IP:port" (wireless debugging that
+    /// is already paired), connects it and names it after its model. The TV may first ask "Allow debugging?".
+    func addTv(_ raw: String) {
+        let input = raw.trimmingCharacters(in: .whitespaces)
+        guard TvCommands.isHost(input) else {
+            message = "Zadej IP adresu televize, např. 192.168.1.50."
+            return
         }
-        select(host)
-        message = "Připojuji k \(host)… Pokud se na televizi objeví dotaz na povolení ladění, potvrď ho."
+        let host = String(input.split(separator: ":")[0])
+        message = "Připojuji k \(host)… Pokud se na televizi objeví „Povolit ladění?“, zaškrtni Vždy povolit a potvrď."
         Task {
-            let info = await AgentClient.get("/info", timeout: 40) as? [String: String]
-            guard let info else {
-                message = "\(host) neodpovídá. Je na televizi zapnuté ladění přes síť (ADB)?"
+            // The agent saves the TV (with its port); keep asking while the TV waits for the user to allow it.
+            var reply: (Int, Any?) = (0, nil)
+            for _ in 0..<12 {
+                reply = await AgentClient.call("/connect?host=" + input, timeout: 30)
+                if reply.0 == 200 || AgentClient.error(reply.1) != "unauthorized" { break }
+                try? await Task.sleep(for: .seconds(5))
+            }
+            tvs = Store.tvs
+            guard reply.0 == 200 else {
+                message = Self.explain(AgentClient.error(reply.1), host: host)
                 return
             }
-            let name = [info["manufacturer"], info["model"]].compactMap { $0 }.joined(separator: " ")
-                .trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty, let i = tvs.firstIndex(where: { $0.host == host }), tvs[i].name == host {
-                tvs[i].name = name
-                Store.tvs = tvs
-            }
+            select(host)
+            await nameFromTv(host)
             message = nil
-            refresh()
+        }
+    }
+
+    /// Pairs a TV showing "Pair device with pairing code" (Android 11+ wireless debugging), then adds it.
+    func pair(_ raw: String, code: String) {
+        let input = raw.trimmingCharacters(in: .whitespaces)
+        let digits = code.filter(\.isNumber)
+        guard TvCommands.isHost(input), digits.count == 6 else {
+            message = "Zadej IP adresu (a port) z obrazovky párování a šestimístný kód."
+            return
+        }
+        let host = String(input.split(separator: ":")[0])
+        message = "Páruji s \(host)…"
+        Task {
+            let reply = await AgentClient.call("/pair?host=\(input)&code=\(digits)", timeout: 60)
+            tvs = Store.tvs
+            guard reply.0 == 200 else {
+                message = Self.explain(AgentClient.error(reply.1), host: host)
+                return
+            }
+            select(host)
+            await nameFromTv(host)
+            message = nil
+        }
+    }
+
+    private func nameFromTv(_ host: String) async {
+        guard let info = await AgentClient.get("/info", timeout: 20) as? [String: String] else { return }
+        let name = [info["manufacturer"], info["model"]].compactMap { $0 }.joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+        if !name.isEmpty, let tv = tvs.first(where: { $0.host == host }), tv.name == host { rename(host, to: name) }
+        refresh()
+    }
+
+    static func explain(_ error: String?, host: String) -> String {
+        switch error {
+        case "unauthorized":
+            return "Televize čeká na potvrzení „Povolit ladění?“. Potvrď ho na televizi a zkus to znovu."
+        case "pairing failed":
+            return "Párování se nepovedlo. Zkontroluj kód a port na obrazovce párování televize."
+        case "no pairing service":
+            return "Televize teď nenabízí párování. Otevři na ní Bezdrátové ladění → Spárovat zařízení pomocí kódu."
+        case "no debugging port":
+            return "Spárováno, ale televize neohlásila port ladění. Zadej IP:port z obrazovky Bezdrátové ladění."
+        case "no adb":
+            return "Chybí nástroje Android (adb) a nepodařilo se je stáhnout. Zkontroluj připojení k internetu."
+        case nil:
+            return "Aplikace se nemůže spojit se svým agentem na pozadí. Zkus WiFi Remote znovu spustit."
+        default:
+            return "\(host) neodpovídá. Je televize zapnutá a má zapnuté ladění přes síť?"
         }
     }
 
@@ -128,6 +184,7 @@ final class RemoteModel: ObservableObject {
     func removeTv(_ host: String) {
         tvs.removeAll { $0.host == host }
         Store.tvs = tvs
+        Store.setButtons([], for: host)
         if activeHost == host { select(tvs.first?.host ?? "") }
     }
 
@@ -331,9 +388,9 @@ struct RemoteView: View {
         VStack(spacing: 14) {
             Image(systemName: "tv.badge.wifi").font(.system(size: 42)).foregroundStyle(.secondary)
             Text("Přidej televizi").font(.headline)
-            Text("WiFi Remote ovládá televize s Androidem / Google TV přes síť. V nastavení ji najdeš nebo zadáš IP adresu.")
+            Text("WiFi Remote ovládá televize s Androidem a Google TV přes Wi-Fi. V nastavení je najde v síti, nebo zadáš jejich IP adresu.")
                 .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            Button("Otevřít nastavení") { openSettings() }.buttonStyle(.glassProminent)
+            Button("Najít televizi") { openSettings() }.buttonStyle(.glassProminent)
         }
         .padding(.vertical, 40)
     }

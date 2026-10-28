@@ -3,11 +3,6 @@ build/
 *.xcodeproj/
 DerivedData/
 
-# Python
-helper/.venv/
-__pycache__/
-*.pyc
-
 # Never commit ADB keys
 adbkey*
 

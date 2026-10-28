@@ -3,9 +3,30 @@
 import Foundation
 
 struct SavedTv: Codable, Identifiable, Hashable {
+    /// The TV's IP address (or host name); also its identity in the app.
     var host: String
     var name: String
+    /// 5555 for classic network debugging. With wireless debugging (tls) the TV picks a new port now and then;
+    /// the agent finds it again over mDNS and saves it here.
+    var port: Int = 5555
+    var tls: Bool = false
     var id: String { host }
+    var serial: String { "\(host):\(port)" }
+
+    init(host: String, name: String, port: Int = 5555, tls: Bool = false) {
+        self.host = host
+        self.name = name
+        self.port = port
+        self.tls = tls
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        host = try c.decode(String.self, forKey: .host)
+        name = try c.decode(String.self, forKey: .name)
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 5555
+        tls = try c.decodeIfPresent(Bool.self, forKey: .tls) ?? false
+    }
 }
 
 struct AppButtonItem: Codable, Identifiable, Hashable {
@@ -18,7 +39,7 @@ enum Store {
     private static let defaults = UserDefaults.standard
 
     static var tvs: [SavedTv] {
-        get { decode("tvs") ?? seedTvs() }
+        get { decode("tvs") ?? [] }
         set { encode(newValue, "tvs") }
     }
 
@@ -35,9 +56,11 @@ enum Store {
 
     static func setButtons(_ items: [AppButtonItem], for host: String) { encode(items, "buttons." + host) }
 
-    /// First run: the TV the app was built for, if any.
-    private static func seedTvs() -> [SavedTv] {
-        BuildConfig.tvHost.isEmpty ? [] : [SavedTv(host: BuildConfig.tvHost, name: "TV")]
+    /// Saves a changed TV (the agent's new port for a wireless-debugging TV, a new name).
+    static func update(_ tv: SavedTv) {
+        var list = tvs
+        if let i = list.firstIndex(where: { $0.host == tv.host }) { list[i] = tv } else { list.append(tv) }
+        tvs = list
     }
 
     private static func decode<T: Decodable>(_ key: String) -> T? {

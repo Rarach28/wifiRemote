@@ -1,4 +1,4 @@
-# xcodegen spec; build.sh generates WiFiRemote.xcodeproj from it and builds with xcodebuild.
+# XcodeGen spec; build.sh generates WiFiRemote.xcodeproj from it and builds with xcodebuild.
 name: WiFiRemote
 options:
   bundleIdPrefix: io.github.rarach28
@@ -11,9 +11,12 @@ settings:
     CODE_SIGN_IDENTITY: "Apple Development"
     DEVELOPMENT_TEAM: ${TEAM_ID}
     PROVISIONING_PROFILE_SPECIFIER: ""
-    MARKETING_VERSION: "1.0.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "2"
     ENABLE_HARDENED_RUNTIME: NO
+    # Apple silicon and Intel
+    ARCHS: "arm64 x86_64"
+    ONLY_ACTIVE_ARCH: NO
 targets:
   WiFiRemote:
     type: application
@@ -21,20 +24,31 @@ targets:
     sources:
       - App
       - Shared
-      - path: build/BuildConfig.swift
-        group: Shared
       - path: build/Assets.xcassets
       - path: Agent/io.github.rarach28.wifiremote.agent.plist
         buildPhase:
           copyFiles:
             destination: wrapper
             subpath: Contents/Library/LaunchAgents
+    entitlements:
+      path: App/WiFiRemote.entitlements
+      properties:
+        # Shares the agent's port and token with the widgets.
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)io.github.rarach28.wifiremote
     info:
       path: build/App-Info.plist
       properties:
         CFBundleDisplayName: WiFi Remote
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.utilities
-        NSLocalNetworkUsageDescription: WiFi Remote sends the remote's buttons to your TV over Wi-Fi.
+        AppGroup: $(TeamIdentifierPrefix)io.github.rarach28.wifiremote
+        NSLocalNetworkUsageDescription: WiFi Remote finds your TV and sends the remote's buttons to it over Wi-Fi.
+        NSBonjourServices:
+          - _adb._tcp
+          - _adb-tls-connect._tcp
+          - _adb-tls-pairing._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.rarach28.wifiremote
@@ -47,17 +61,20 @@ targets:
     sources:
       - Widget
       - Shared
-      - path: build/BuildConfig.swift
-        group: Shared
     entitlements:
       path: Widget/RemoteWidget.entitlements
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        com.apple.security.application-groups:
+          - $(TeamIdentifierPrefix)io.github.rarach28.wifiremote
     info:
       path: build/Widget-Info.plist
       properties:
         CFBundleDisplayName: WiFi Remote
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AppGroup: $(TeamIdentifierPrefix)io.github.rarach28.wifiremote
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

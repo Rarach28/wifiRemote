@@ -7,21 +7,33 @@ struct SettingsView: View {
             TvsTab().tabItem { Label("Televize", systemImage: "tv") }
             ButtonsTab().tabItem { Label("Tlačítka", systemImage: "square.grid.2x2") }
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 600, height: 600)
     }
+}
+
+/// A TV found on the network. kind: "classic" (network debugging, port 5555), "paired" (wireless debugging,
+/// already paired with this Mac) or "pairing" (showing "Pair device with pairing code" right now).
+struct FoundTv: Identifiable, Hashable {
+    let host: String
+    let port: Int
+    let kind: String
+    var id: String { host }
 }
 
 struct TvsTab: View {
     @ObservedObject private var model = RemoteModel.shared
     @State private var newHost = ""
+    @State private var pairHost = ""
+    @State private var pairCode = ""
+    @State private var codes: [String: String] = [:]
     @State private var scanning = false
-    @State private var found: [String]?
+    @State private var found: [FoundTv]?
 
     var body: some View {
         Form {
             Section("Uložené televize") {
                 if model.tvs.isEmpty {
-                    Text("Zatím žádná. Přidej ji níže.").foregroundStyle(.secondary)
+                    Text("Zatím žádná. Najdi ji v síti nebo zadej její IP adresu.").foregroundStyle(.secondary)
                 }
                 ForEach(model.tvs) { tv in
                     HStack(spacing: 10) {
@@ -29,49 +41,42 @@ struct TvsTab: View {
                             .foregroundStyle(tv.host == model.activeHost ? Color.accentColor : .secondary)
                             .onTapGesture { model.select(tv.host) }
                         TextField("Název", text: Binding(get: { tv.name }, set: { model.rename(tv.host, to: $0) }))
-                            .textFieldStyle(.plain)
-                        Text(tv.host).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+                            .textFieldStyle(.plain).labelsHidden()
+                        Text(tv.tls ? "\(tv.host):\(tv.port)" : tv.host)
+                            .font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                         Button(role: .destructive) { model.removeTv(tv.host) } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                     }
                 }
             }
 
-            Section("Přidat televizi") {
+            Section {
                 HStack {
-                    TextField("IP adresa, např. 192.168.1.50", text: $newHost)
-                        .onSubmit(add)
-                    Button("Přidat", action: add).disabled(newHost.isEmpty)
-                }
-                HStack {
-                    Button {
-                        scanning = true
-                        found = nil
-                        Task {
-                            let hosts = await Discovery.scan()
-                            found = hosts.filter { h in !model.tvs.contains { $0.host == h } }
-                            scanning = false
-                        }
-                    } label: { Label("Hledat v síti", systemImage: "dot.radiowaves.left.and.right") }
+                    Button(action: scan) { Label("Hledat znovu", systemImage: "dot.radiowaves.left.and.right") }
                         .disabled(scanning)
                     if scanning { ProgressView().controlSize(.small) }
                 }
                 if let found {
-                    if found.isEmpty {
-                        Text("Nenašla se žádná další televize se zapnutým laděním přes síť.")
+                    if found.isEmpty && !scanning {
+                        Text("Žádná nová televize. Je zapnutá, ve stejné síti a má zapnuté ladění (viz postup níže)?")
                             .foregroundStyle(.secondary)
                     }
-                    ForEach(found, id: \.self) { host in
-                        HStack {
-                            Image(systemName: "tv")
-                            Text(host).font(.system(.body, design: .monospaced))
-                            Spacer()
-                            Button("Přidat") {
-                                model.addTv(host)
-                                self.found?.removeAll { $0 == host }
-                            }
-                        }
-                    }
+                    ForEach(found) { tv in foundRow(tv) }
+                }
+            } header: {
+                Text("Televize v síti")
+            }
+
+            Section("Přidat podle IP adresy") {
+                HStack {
+                    TextField("IP adresa", text: $newHost, prompt: Text("např. 192.168.1.50")).onSubmit(add)
+                    Button("Přidat", action: add).disabled(newHost.isEmpty)
+                }
+                HStack {
+                    TextField("Párování", text: $pairHost, prompt: Text("IP:port z obrazovky párování"))
+                    TextField("Kód", text: $pairCode, prompt: Text("123456")).labelsHidden().frame(width: 80)
+                    Button("Spárovat") { model.pair(pairHost, code: pairCode) }
+                        .disabled(pairHost.isEmpty || pairCode.count < 6)
                 }
                 if let message = model.message {
                     Text(message).font(.callout).foregroundStyle(.orange)
@@ -81,16 +86,68 @@ struct TvsTab: View {
             Section("Jak televizi připravit") {
                 Text("""
                 WiFi Remote ovládá televize s Androidem a Google TV (TCL, Sony, Philips, Xiaomi, Hisense, \
-                Chromecast s Google TV…) přes ADB po síti.
+                Chromecast s Google TV…) přes ladění po síti.
                 1. Na televizi: Nastavení → Systém → Informace → 7× klikni na Sestavení (zapne Pro vývojáře).
-                2. V Možnostech pro vývojáře zapni Ladění USB a Ladění přes síť / ADB přes síť.
-                3. Přidej televizi tady. Při prvním připojení potvrď na televizi „Povolit ladění?“ \
-                (zaškrtni Vždy povolit z tohoto počítače).
+                2. V Možnostech pro vývojáře zapni Ladění USB a pak jedno z:
+                   • Ladění přes síť / ADB přes síť: televize se tu objeví, stačí Přidat a na televizi potvrdit \
+                „Povolit ladění?“.
+                   • Bezdrátové ladění (Android 11 a novější): otevři Spárovat zařízení pomocí kódu, televize \
+                se tu objeví, opiš šestimístný kód a klikni Spárovat.
                 """)
                 .font(.callout).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
+        .onAppear { if found == nil { scan() } }
+    }
+
+    @ViewBuilder private func foundRow(_ tv: FoundTv) -> some View {
+        HStack {
+            Image(systemName: "tv")
+            VStack(alignment: .leading, spacing: 1) {
+                Text(tv.host).font(.system(.body, design: .monospaced))
+                Text(tv.kind == "pairing" ? "Čeká na párovací kód" : tv.kind == "paired" ? "Bezdrátové ladění" : "Ladění přes síť")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if tv.kind == "pairing" {
+                TextField("Kód", text: Binding(get: { codes[tv.host] ?? "" }, set: { codes[tv.host] = $0 }),
+                          prompt: Text("Kód"))
+                    .labelsHidden().frame(width: 80)
+                Button("Spárovat") {
+                    model.pair("\(tv.host):\(tv.port)", code: codes[tv.host] ?? "")
+                    found?.removeAll { $0 == tv }
+                }
+                .disabled((codes[tv.host] ?? "").filter(\.isNumber).count != 6)
+            } else {
+                Button("Přidat") {
+                    model.addTv(tv.kind == "paired" ? "\(tv.host):\(tv.port)" : tv.host)
+                    found?.removeAll { $0 == tv }
+                }
+            }
+        }
+    }
+
+    /// mDNS through the agent's adb, plus a sweep of the local network for port 5555 (TVs that do not announce).
+    private func scan() {
+        scanning = true
+        Task {
+            async let swept = Discovery.scan()
+            async let announced = AgentClient.get("/discover", timeout: 30) as? [[String: Any]] ?? []
+            var byHost: [String: FoundTv] = [:]
+            for item in await announced {
+                guard let host = item["host"] as? String, let port = item["port"] as? Int,
+                      let kind = item["kind"] as? String else { continue }
+                byHost[host] = FoundTv(host: host, port: port, kind: kind)
+            }
+            for host in await swept where byHost[host] == nil {
+                byHost[host] = FoundTv(host: host, port: 5555, kind: "classic")
+            }
+            found = byHost.values
+                .filter { tv in tv.kind == "pairing" || !model.tvs.contains { $0.host == tv.host } }
+                .sorted { $0.host.localizedStandardCompare($1.host) == .orderedAscending }
+            scanning = false
+        }
     }
 
     private func add() {
