@@ -1,0 +1,65 @@
+# xcodegen spec; build.sh generates WiFiRemote.xcodeproj from it and builds with xcodebuild.
+name: WiFiRemote
+options:
+  bundleIdPrefix: io.github.rarach28
+  deploymentTarget:
+    macOS: "26.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: ${TEAM_ID}
+    PROVISIONING_PROFILE_SPECIFIER: ""
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: NO
+targets:
+  WiFiRemote:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+      - path: build/BuildConfig.swift
+        group: Shared
+      - path: build/Assets.xcassets
+      - path: Agent/io.github.rarach28.wifiremote.agent.plist
+        buildPhase:
+          copyFiles:
+            destination: wrapper
+            subpath: Contents/Library/LaunchAgents
+    info:
+      path: build/App-Info.plist
+      properties:
+        CFBundleDisplayName: WiFi Remote
+        LSApplicationCategoryType: public.app-category.utilities
+        NSLocalNetworkUsageDescription: WiFi Remote sends the remote's buttons to your TV over Wi-Fi.
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.rarach28.wifiremote
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    dependencies:
+      - target: RemoteWidget
+  RemoteWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Widget
+      - Shared
+      - path: build/BuildConfig.swift
+        group: Shared
+    entitlements:
+      path: Widget/RemoteWidget.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+    info:
+      path: build/Widget-Info.plist
+      properties:
+        CFBundleDisplayName: WiFi Remote
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.rarach28.wifiremote.widget
